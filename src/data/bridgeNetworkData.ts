@@ -437,6 +437,8 @@ export default [
       "Mode",
       "Rootstock",
       "Blast",
+      "Scroll",
+      "ZKLink",
     ],
     chainMapping: {
       avalanche: "avax", // this is needed temporarily, need to fix and remove
@@ -989,6 +991,8 @@ export default [
       "Zkfair",
       "Merlin",
       "BSquared",
+      "BTR",
+      "X Layer",
 
       "zkSync Era",
       "Polygon zkEVM",
@@ -998,6 +1002,7 @@ export default [
       "zksync era": "era",
       "polygon zkevm": "polygon_zkevm",
       bsquared: "b2-mainnet",
+      "x layer": "xlayer",
     },
   },
 ] as BridgeNetwork[];
