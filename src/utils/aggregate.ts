@@ -11,24 +11,23 @@ import {
   getTimestampAtStartOfDayUTC,
 } from "./date";
 import { getLlamaPrices } from "./prices";
-import {
-  getBridgeID,
-  queryAggregatedHourlyDataAtTimestamp,
-  queryAggregatedDailyDataAtTimestamp,
-  getLargeTransaction,
-} from "./wrappa/postgres/query";
+import { getBridgeID, getLargeTransaction } from "./wrappa/postgres/query";
 import {
   insertHourlyAggregatedRow,
   insertDailyAggregatedRow,
   insertLargeTransactionRow,
   insertErrorRow,
+  insertOrUpdateTokenWithoutPrice,
 } from "./wrappa/postgres/write";
 import adapters from "../adapters";
+import { isAsyncAdapter } from "../utils/adapter";
 import bridgeNetworks from "../data/bridgeNetworkData";
 import { importBridgeNetwork } from "../data/importBridgeNetwork";
 import { defaultConfidenceThreshold } from "./constants";
 import { transformTokenDecimals, transformTokens } from "../helpers/tokenMappings";
 import { blacklist } from "../data/blacklist";
+import { PublicKey } from "@solana/web3.js";
+const sdk = require("@defillama/sdk");
 
 const nullPriceCountThreshold = 10; // insert error when there are more than this many prices missing per hour/day for a bridge
 
@@ -55,8 +54,21 @@ export const runAggregateDataHistorical = async (
 ) => {
   const currentTimestamp = getCurrentUnixTimestamp() * 1000;
   const bridgeNetwork = importBridgeNetwork(undefined, bridgeNetworkId);
+
+  if (!bridgeNetwork) {
+    const errString = `Bridge network with id ${bridgeNetworkId} not found.`;
+    await insertErrorRow({
+      ts: currentTimestamp,
+      target_table: hourly ? "hourly_aggregated" : "daily_aggregated",
+      keyword: "critical",
+      error: errString,
+    });
+    throw new Error(errString);
+  }
+
   const { bridgeDbName, largeTxThreshold } = bridgeNetwork!;
-  const adapter = adapters[bridgeDbName];
+  let adapter = adapters[bridgeDbName];
+  adapter = isAsyncAdapter(adapter) ? await adapter.build() : adapter;
 
   if (!adapter) {
     const errString = `Adapter for ${bridgeDbName} not found, check it is exported correctly.`;
@@ -68,7 +80,9 @@ export const runAggregateDataHistorical = async (
     });
     throw new Error(errString);
   }
+
   const chains = Object.keys(adapter);
+
   let timestamp = endTimestamp;
   while (timestamp > startTimestamp) {
     if (chainToRestrictTo) {
@@ -109,11 +123,12 @@ export const runAggregateDataHistorical = async (
 };
 
 export const runAggregateDataAllAdapters = async (timestamp: number, hourly: boolean = false) => {
-  await PromisePool.withConcurrency(2)
+  await PromisePool.withConcurrency(5)
     .for(bridgeNetworks)
     .process(async (bridgeNetwork) => {
       const { bridgeDbName, largeTxThreshold } = bridgeNetwork;
-      const adapter = adapters[bridgeDbName];
+      let adapter = adapters[bridgeDbName];
+      adapter = isAsyncAdapter(adapter) ? await adapter.build() : adapter;
       const chains = Object.keys(adapter);
       const chainsPromises = Promise.all(
         chains.map(async (chain) => {
@@ -134,8 +149,29 @@ export const runAggregateDataAllAdapters = async (timestamp: number, hourly: boo
       await chainsPromises;
     });
 
-  await sql.end();
   console.log("Finished aggregating job.");
+};
+
+export const runAggregateDataHistoricalAllAdapters = async (startTimestamp: number, endTimestamp: number) => {
+  const promises = Promise.all(
+    bridgeNetworks.map(async (bridgeNetwork) => {
+      const { id } = bridgeNetwork;
+      try {
+        await runAggregateDataHistorical(startTimestamp, endTimestamp, id, true);
+      } catch (e) {
+        console.error(`Error aggregating data for bridge network ${id}:`, e);
+      }
+    })
+  );
+  await promises;
+};
+
+const checkSolanaAddress = (address: string) => {
+  try {
+    return PublicKey.isOnCurve(address);
+  } catch (e) {
+    return false;
+  }
 };
 
 /*
@@ -243,10 +279,12 @@ export const aggregateData = async (
 
   const uniqueTokenPromises = Promise.all(
     txs.map(async (tx) => {
-      const { token, chain, is_usd_volume } = tx;
+      let { token, chain, is_usd_volume, origin_chain } = tx;
+      const isSolanaAddress = checkSolanaAddress(token);
+      chain = isSolanaAddress ? "solana" : origin_chain ?? chain;
       if (!is_usd_volume) {
         if (!token || !chain) return;
-        const tokenL = token.toLowerCase();
+        const tokenL = isSolanaAddress ? token : token.toLowerCase();
         uniqueTokens[transformTokens[chain]?.[tokenL] ?? `${chain}:${tokenL}`] = true;
       }
     })
@@ -265,10 +303,11 @@ export const aggregateData = async (
     console.log(errString);
   }
 
-  let tokensWithNullPrices = new Set();
+  let tokensWithNullPrices = new Set<string>();
   const txsPromises = Promise.all(
     txs.map(async (tx) => {
-      const { id, chain, token, amount, ts, is_deposit, tx_to, tx_from, is_usd_volume, txs_counted_as } = tx;
+      const { id, chain, token, amount, ts, is_deposit, tx_to, tx_from, is_usd_volume, txs_counted_as, origin_chain } =
+        tx;
       if (
         tx_from?.toLowerCase() === "0x0000000000000000000000000000000000000000" ||
         tx_to?.toLowerCase() === "0x0000000000000000000000000000000000000000"
@@ -283,8 +322,9 @@ export const aggregateData = async (
       let tokenKey = null;
       if (is_usd_volume) {
         usdValue = rawBnAmount.toNumber();
+        tokenKey = `${chain}:${token}`;
       } else {
-        const tokenL = token.toLowerCase();
+        const tokenL = chain === "solana" || origin_chain === "solana" ? token : token.toLowerCase();
         const transformedDecimals = transformTokenDecimals[chain]?.[tokenL] ?? null;
         tokenKey = transformTokens[chain]?.[tokenL] ?? `${chain}:${tokenL}`;
         if (blacklist.includes(tokenKey)) {
@@ -293,7 +333,7 @@ export const aggregateData = async (
         }
         const priceData = llamaPrices[tokenKey];
         if (!priceData && !tokensWithNullPrices.has(tokenKey)) {
-          console.log(`No price data for ${tokenKey}`);
+          console.log(`No price data for ${tokenKey}`, tx);
           tokensWithNullPrices.add(tokenKey);
         }
         if (priceData && (priceData.confidence === undefined || priceData.confidence >= defaultConfidenceThreshold)) {
@@ -306,28 +346,32 @@ export const aggregateData = async (
           }
 
           usdValue = bnAmount.multipliedBy(Number(price)).toNumber();
-          if (usdValue > 10 ** 9) {
-            const errString = `USD value of tx id ${id} is ${usdValue}.`;
-            await insertErrorRow({
-              ts: currentTimestamp,
-              target_table: hourly ? "hourly_aggregated" : "daily_aggregated",
-              keyword: "data",
-              error: errString,
-            });
-          }
-          if (usdValue > 10 ** 10) {
-            console.error(`USD value of tx id ${id} is over 10 billion, skipping.`);
-            return;
-          }
-          if (largeTxThreshold && id && usdValue > largeTxThreshold) {
-            largeTxs.push({
-              id: id,
-              ts: ts,
-              usdValue: usdValue,
-            });
-          }
         }
       }
+
+      if (usdValue) {
+        if (usdValue > 10 ** 9) {
+          const errString = `USD value of tx id ${id} is ${usdValue}.`;
+          await insertErrorRow({
+            ts: currentTimestamp,
+            target_table: hourly ? "hourly_aggregated" : "daily_aggregated",
+            keyword: "data",
+            error: errString,
+          });
+        }
+        if (usdValue > 10 ** 10) {
+          console.error(`USD value of tx id ${id} is over 10 billion, skipping.`);
+          return;
+        }
+        if (largeTxThreshold && id && usdValue > largeTxThreshold) {
+          largeTxs.push({
+            id: id,
+            ts: ts,
+            usdValue: usdValue,
+          });
+        }
+      }
+
       if (is_deposit) {
         totalDepositedUsd += usdValue ?? 0;
         if (txs_counted_as) {
@@ -335,7 +379,7 @@ export const aggregateData = async (
         } else {
           totalDepositTxs += 1;
         }
-        if (!is_usd_volume && tokenKey) {
+        if (tokenKey) {
           cumTokensDeposited[tokenKey] = cumTokensDeposited[tokenKey] || {};
           cumTokensDeposited[tokenKey].amount = cumTokensDeposited[tokenKey].amount
             ? cumTokensDeposited[tokenKey].amount.plus(rawBnAmount)
@@ -356,7 +400,7 @@ export const aggregateData = async (
         } else {
           totalWithdrawalTxs += 1;
         }
-        if (!is_usd_volume && tokenKey) {
+        if (tokenKey) {
           cumTokensWithdrawn[tokenKey] = cumTokensWithdrawn[tokenKey] || {};
           cumTokensWithdrawn[tokenKey].amount = cumTokensWithdrawn[tokenKey].amount
             ? cumTokensWithdrawn[tokenKey].amount.plus(rawBnAmount)
@@ -374,6 +418,19 @@ export const aggregateData = async (
     })
   );
   await txsPromises;
+  if (tokensWithNullPrices.size) {
+    await Promise.all(
+      Array.from(tokensWithNullPrices).map(async (token: string) => {
+        try {
+          const [chain, tokenAddress] = token.split(":");
+          const tokenSymbol = (await sdk.api.erc20.symbol(tokenAddress, chain)).output;
+          await insertOrUpdateTokenWithoutPrice(token, tokenSymbol);
+        } catch (e) {
+          console.error(`Could not insert or update token without price: ${token}`, e);
+        }
+      })
+    );
+  }
   if (tokensWithNullPrices.size > nullPriceCountThreshold) {
     const errString = `There are ${tokensWithNullPrices.size} missing prices for ${bridgeID} from ${startTimestamp} to ${endTimestamp}`;
     await insertErrorRow({
