@@ -1,4 +1,4 @@
-import { BridgeAdapter } from "../helpers/bridgeAdapter.type";
+import { BridgeAdapter, AsyncBridgeAdapter } from "../helpers/bridgeAdapter.type";
 import polygon from "./polygon";
 import synapse from "./synapse";
 import hop from "./hop";
@@ -57,7 +57,27 @@ import fuse from "./fuse";
 import orbiter from "./orbiter";
 import connext from "./connext";
 import xswap from "./xswap";
-import owlto from "./owlto"
+import owlto from "./owlto";
+import zkbridge from "./zkbridge";
+import helixbox from "./helixbox";
+import oooo from "./oooo";
+import memebridge from "./memebridge";
+import bunnyfi from "./bunnyfi";
+import minibridge from "./minibridge";
+import cometbridge from "./cometbridge";
+import fastbtc from "./rootstock-fastbtc-bridge";
+import crowdswap from "./crowdswap";
+import mint from "./mint";
+import suibridge from "./suibridge";
+import retrobridge from "./retrobridge";
+import layerswap from "./layerswap";
+import hyperlane from "./hyperlane";
+import wormhole from "./wormhole";
+import thresholdnetwork from "./threshold-network";
+import zircuit from "./zircuit";
+import hyperliquid from "./hyperliquid";
+import flyover from "./rootstock-flyover";
+import universalx from "./universalx";
 
 export default {
   polygon,
@@ -75,7 +95,8 @@ export default {
   portal,
   binancepeg,
   xdai,
-  "avalanche-btc": avalanchebtc,
+  oooo,
+  "avalanche-c": avalanchebtc,
   axelar,
   rainbowbridge,
   across,
@@ -118,6 +139,26 @@ export default {
   connext,
   xswap,
   owlto,
+  zkbridge,
+  zkbridge111: zkbridge,
+  helixbridge: helixbox,
+  memebridge,
+  bunnyfi,
+  minibridge,
+  cometbridge,
+  fastbtc,
+  crowdswap,
+  mint,
+  suibridge,
+  retrobridge,
+  layerswap,
+  hyperlane,
+  wormhole,
+  thresholdnetwork,
+  zircuit,
+  hyperliquid,
+  flyover,
+  universalx,
 } as {
-  [bridge: string]: BridgeAdapter;
+  [bridge: string]: BridgeAdapter | AsyncBridgeAdapter;
 };
