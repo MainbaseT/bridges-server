@@ -14,6 +14,7 @@ const txTypes = {
   is_deposit: "boolean",
   is_usd_volume: "boolean",
   txs_counted_as: "number",
+  origin_chain: "string",
 } as { [key: string]: string };
 
 export const insertTransactionRow = async (
@@ -32,10 +33,11 @@ export const insertTransactionRow = async (
     is_deposit: boolean;
     is_usd_volume: boolean;
     txs_counted_as: number | null;
+    origin_chain: string | null;
   },
   onConflict: "ignore" | "error" | "upsert" = "error"
 ) => {
-  // FIX should use dynamicly built strings here, I just didn't finish it
+  // FIX should use dynamically built strings here, I just didn't finish it
   let sqlCommand = sql`
   insert into bridges.transactions ${sql(params)}
 `;
@@ -113,7 +115,10 @@ export const insertConfigRow = async (
   for (let i = 0; i < 5; i++) {
     try {
       console.log(`inserting into bridges.config`);
-      return sql`insert into bridges.config ${sql(paramsToAvoidTsError)}`;
+      return sql`
+        INSERT INTO bridges.config ${sql(paramsToAvoidTsError)} 
+        ON CONFLICT (bridge_name, chain) DO NOTHING;
+      `;
     } catch (e) {
       if (i >= 4) {
         throw new Error(`Could not insert config row for ${params.bridge_name} on ${params.chain}`);
@@ -269,5 +274,17 @@ export const insertErrorRow = async (params: {
         continue;
       }
     }
+  }
+};
+
+export const insertOrUpdateTokenWithoutPrice = async (token: string, symbol: string) => {
+  try {
+    await sql`
+        INSERT INTO bridges.tokens_without_price ${sql({ token, occurrence_count: 1, symbol })}
+        ON CONFLICT (token)
+        DO UPDATE SET occurrence_count = bridges.tokens_without_price.occurrence_count + 1, symbol = ${symbol};
+      `;
+  } catch (e) {
+    console.error(`Could not insert or update token without price: ${token}`, e);
   }
 };
