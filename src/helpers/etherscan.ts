@@ -10,10 +10,9 @@ const endpoints = {
   fantom: "https://api.ftmscan.com",
   arbitrum: "https://api.arbiscan.io",
   optimism: "https://api-optimistic.etherscan.io",
-  aurora: "https://explorer.mainnet.aurora.dev/api",
+  aurora: "https://explorer.mainnet.aurora.dev",
   celo: "https://api.celoscan.io",
-  "zksync era": "https://block-explorer-api.mainnet.zksync.io/api",
-  mantle: "https://explorer.mantle.xyz/api",
+  "zksync era": "https://block-explorer-api.mainnet.zksync.io",
   base: "https://api.basescan.org",
   linea: "https://api.lineascan.build",
   scroll: "https://api.scrollscan.com",
@@ -21,6 +20,9 @@ const endpoints = {
   polygon_zkevm: "https://api-zkevm.polygonscan.com",
   arbitrum_nova: "https://api-nova.arbiscan.io",
   era: "https://api-era.zksync.network",
+  zklink: "https://explorer-api.zklink.io",
+  taiko: "https://api.taikoscan.io",
+  mantle: "https://api.mantlescan.xyz",
 } as { [chain: string]: string };
 
 const apiKeys = {
@@ -40,6 +42,8 @@ const apiKeys = {
   arbitrum_nova: "SZZE864TZH3MGRUUDPRPUS7NF8MAFZBDAZ",
   polygon_zkevm: "XKFP275U27W7AI4NGUIT7VGEQ179P4XA1S",
   era: "9HJZA6X8DEJ46WHMM2UEJ5WCXPG31C7EWI",
+  taiko: "DYUMJ7MP38G6TFY173JA2E9DJ9TXYI1RYD",
+  mantle: "K3J4M6QYEIFN1GRAQFIN7RT5UYXC3BAPXH"
 } as { [chain: string]: string };
 
 export const getTxsBlockRangeEtherscan = async (
@@ -52,12 +56,16 @@ export const getTxsBlockRangeEtherscan = async (
   const endpoint = endpoints[chain];
   const apiKey = apiKeys[chain];
   let res;
+  if (!endpoint) {
+    console.error(`WARNING: No Etherscan endpoint found for chain ${chain}.`);
+    return [];
+  }
   if (!apiKey) {
     res = (
       await retry(
         () =>
           axios.get(
-            `${endpoint}?module=account&action=txlist&address=${address}&startblock=${startBlock}&endblock=${endBlock}`
+            `${endpoint}/api?module=account&action=txlist&address=${address}&startblock=${startBlock}&endblock=${endBlock}`
           ),
         { factor: 1, retries: 3 }
       )
