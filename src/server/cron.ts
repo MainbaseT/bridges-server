@@ -316,6 +316,9 @@ const cron = () => {
           bridgeName,
           signal,
           aggregate: runAggregateHistoricalByName,
+          aggregationDates: bridgeName === "ccip"
+            ? (ingestion.result as Awaited<ReturnType<typeof runCCIP>>).aggregationDates
+            : undefined,
           startTimestamp: bridgeName === "ccip"
             ? (ingestion.result as Awaited<ReturnType<typeof runCCIP>>).startTimestamp
             : undefined,

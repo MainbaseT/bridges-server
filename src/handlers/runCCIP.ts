@@ -3,6 +3,7 @@ import { sql } from "../utils/db";
 import { throwIfAborted } from "../utils/errors";
 import { insertTransactionRows } from "../utils/wrappa/postgres/write";
 import { ccipEventKey, ccipUSDTotals, diffCCIPSnapshot, groupCCIPEvents, StoredCCIPEvent } from "./ccipSnapshot";
+import { runCCIPDailyRun } from "./ccipDailyRun";
 
 export async function reconcileCCIPDay(date: string, dryRun = false, signal?: AbortSignal) {
   ccipDateRange(date, date);
@@ -110,9 +111,17 @@ export async function runCCIPBackfillMode(startDate: string, endDate: string, si
 
 export async function runCCIPDefaultMode(signal?: AbortSignal) {
   const today = Math.floor(Date.now() / 86400000) * 86400000;
-  return runCCIPBackfillMode(
+  const dates = ccipDateRange(
     new Date(today - CCIP_LOOKBACK_DAYS * 86400000).toISOString().slice(0, 10),
-    new Date(today - 86400000).toISOString().slice(0, 10),
+    new Date(today - 86400000).toISOString().slice(0, 10)
+  );
+  return runCCIPDailyRun(
+    dates,
+    async (date, signal) => {
+      const summary = await reconcileCCIPDay(date, false, signal);
+      console.log("[CCIP]", JSON.stringify(summary));
+      return summary;
+    },
     signal
   );
 }
