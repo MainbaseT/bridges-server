@@ -2,8 +2,9 @@ import { CCIP_LOOKBACK_DAYS, ccipDateRange, ccipDayStart, fetchEventsForDate } f
 import { sql } from "../utils/db";
 import { throwIfAborted } from "../utils/errors";
 import { insertTransactionRows } from "../utils/wrappa/postgres/write";
-import { ccipEventKey, ccipUSDTotals, diffCCIPSnapshot, groupCCIPEvents, StoredCCIPEvent } from "./ccipSnapshot";
+import { ccipRowsToMove, ccipUSDTotals, diffCCIPSnapshot, groupCCIPEvents, StoredCCIPEvent } from "./ccipSnapshot";
 import { runCCIPDailyRun } from "./ccipDailyRun";
+import { decodeCCIPTransactionHash } from "../utils/ccipTransactionHash";
 
 export async function reconcileCCIPDay(date: string, dryRun = false, signal?: AbortSignal) {
   ccipDateRange(date, date);
@@ -28,30 +29,39 @@ export async function reconcileCCIPDay(date: string, dryRun = false, signal?: Ab
     let changed = [...diff.added, ...diff.updated];
     const movedFromDates = new Set<string>();
     if (changed.length) {
+      const keysToCheck = changed.flatMap((event) => [
+        event,
+        { ...event, tx_hash: decodeCCIPTransactionHash(event.tx_hash) },
+      ]);
       const outside = await tx<StoredCCIPEvent[]>`
-        SELECT t.* FROM bridges.transactions t JOIN bridges.config c ON c.id = t.bridge_id
-        JOIN jsonb_to_recordset(${tx.json(changed)})
+        SELECT DISTINCT t.* FROM jsonb_to_recordset(${tx.json(keysToCheck)})
           AS e(chain text, tx_hash text, token text, tx_from text, tx_to text)
-          ON t.chain = e.chain AND t.tx_hash = e.tx_hash AND t.token = e.token
+        JOIN bridges.config c ON c.bridge_name = 'ccip' AND c.chain = e.chain
+        JOIN bridges.transactions t ON t.bridge_id = c.id AND t.chain = e.chain
+          AND t.tx_hash = e.tx_hash AND t.token = e.token
           AND t.tx_from = e.tx_from AND t.tx_to = e.tx_to
-        WHERE c.bridge_name = 'ccip' AND (t.ts < ${start} OR t.ts >= ${end})
+        WHERE t.ts < ${start} OR t.ts >= ${end}
       `;
-      for (const row of outside) movedFromDates.add(row.ts.toISOString().slice(0, 10));
+      const rowsToMove: StoredCCIPEvent[] = [];
       // A timestamp correction is safe to move only if the provider no longer
       // reports this key on the old day. Genuine cross-day batches still fail.
-      for (const oldDate of movedFromDates) {
+      for (const oldDate of new Set(outside.map((row) => row.ts.toISOString().slice(0, 10)))) {
         ccipDateRange(oldDate, oldDate);
         const oldEvents = await fetchEventsForDate(oldDate, signal);
         if (!oldEvents.length)
           throw new Error(`Cannot verify CCIP timestamp correction from an empty snapshot for ${oldDate}`);
-        const oldKeys = new Set(groupCCIPEvents(oldEvents).map(ccipEventKey));
-        const conflict = outside.find(
-          (row) => row.ts.toISOString().slice(0, 10) === oldDate && oldKeys.has(ccipEventKey(row))
+        const moving = ccipRowsToMove(
+          expected,
+          outside.filter((row) => row.ts.toISOString().slice(0, 10) === oldDate),
+          groupCCIPEvents(oldEvents)
         );
-        if (conflict) throw new Error(`CCIP transaction key is present in both UTC days: ${conflict.tx_hash}`);
+        if (moving.length) {
+          rowsToMove.push(...moving);
+          movedFromDates.add(oldDate);
+        }
       }
-      if (outside.length) {
-        diff = diffCCIPSnapshot(expected, [...stored, ...outside]);
+      if (rowsToMove.length) {
+        diff = diffCCIPSnapshot(expected, [...stored, ...rowsToMove]);
         changed = [...diff.added, ...diff.updated];
       }
     }

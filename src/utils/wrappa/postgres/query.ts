@@ -1,6 +1,7 @@
 import bridgeNetworkData from "../../../data/bridgeNetworkData";
 import { querySql as sql } from "../../db";
 import { MAX_TRANSACTIONS_LIMIT, TransactionCursor } from "../../transactionCursor";
+import { CCIP_HASH_SEPARATOR } from "../../ccipTransactionHash";
 
 interface IConfig {
   id: string;
@@ -460,7 +461,9 @@ const queryLargeTransactionsTimestampRange = async (
       transactions.bridge_id,
       EXTRACT(EPOCH FROM transactions.ts)::double precision AS ts,
       transactions.tx_block,
-      transactions.tx_hash,
+      CASE WHEN config.bridge_name = 'ccip'
+        THEN split_part(transactions.tx_hash, ${CCIP_HASH_SEPARATOR}, 1)
+        ELSE transactions.tx_hash END AS tx_hash,
       transactions.tx_from,
       transactions.tx_to,
       transactions.token,
@@ -528,7 +531,9 @@ const queryTransactionsTimestampRangeByBridgeNetwork = async (
   SELECT transactions.id::text AS transaction_id,
        to_char(transactions.ts AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_ts,
        transactions.bridge_id,
-       transactions.tx_hash,
+       CASE WHEN config.bridge_name = 'ccip'
+         THEN split_part(transactions.tx_hash, ${CCIP_HASH_SEPARATOR}, 1)
+         ELSE transactions.tx_hash END AS tx_hash,
        transactions.ts,
        transactions.tx_block,
        transactions.tx_from,

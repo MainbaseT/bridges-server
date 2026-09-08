@@ -1,10 +1,26 @@
 import BigNumber from "bignumber.js";
 import { CCIPEvent } from "../adapters/ccip";
+import { decodeCCIPTransactionHash } from "../utils/ccipTransactionHash";
 
 export type StoredCCIPEvent = Omit<CCIPEvent, "ts"> & { id: string; ts: Date };
 
 export const ccipEventKey = (event: Pick<CCIPEvent, "chain" | "tx_hash" | "token" | "tx_from" | "tx_to">) =>
   JSON.stringify([event.chain, event.tx_hash, event.token, event.tx_from, event.tx_to]);
+
+// Old unsuffixed rows cannot identify which message in a destination batch they
+// represent. Leave them for their own day's reconciliation. New suffixed rows
+// identify one message and can be moved safely after checking the old snapshot.
+export function ccipRowsToMove(expected: CCIPEvent[], outside: StoredCCIPEvent[], oldEvents: CCIPEvent[]) {
+  const expectedKeys = new Set(expected.map(ccipEventKey));
+  const oldKeys = new Set(oldEvents.map(ccipEventKey));
+  return outside.filter((row) => {
+    if (row.tx_hash === decodeCCIPTransactionHash(row.tx_hash)) return false;
+    const key = ccipEventKey(row);
+    if (!expectedKeys.has(key)) return false;
+    if (oldKeys.has(key)) throw new Error(`CCIP message is present in both UTC days: ${row.tx_hash}`);
+    return true;
+  });
+}
 
 export function groupCCIPEvents(events: CCIPEvent[]): CCIPEvent[] {
   const grouped = new Map<string, CCIPEvent>();

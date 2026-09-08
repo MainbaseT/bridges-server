@@ -1,5 +1,6 @@
 import { BridgeAdapter } from "../../helpers/bridgeAdapter.type";
 import { throwIfAborted } from "../../utils/errors";
+import { encodeCCIPTransactionHash } from "../../utils/ccipTransactionHash";
 
 export type CCIPEvent = {
   chain: string;
@@ -19,6 +20,8 @@ const API_BASE_URL = "https://dsa-metrics-api-gw-8p4u7g34.nw.gateway.dev/v1/ccip
 const chainAliases: Record<string, string> = {
   etlk: "etherlink",
   op_bnb: "opbnb",
+  // The metrics API uses `new` for AB Core (36888), not AB IoT (1012).
+  new: "ab chain",
 };
 
 export function ccipDayStart(date: string): number {
@@ -88,7 +91,7 @@ export function parseCCIPSnapshot(data: unknown, date: string): CCIPEvent[] {
       if (!chains.includes(chain)) throw new Error(`Unknown CCIP chain ${rawChain} for ${date}`);
       events.push({
         chain,
-        tx_hash: isDeposit ? tx.destTxHash : tx.sourceTxHash,
+        tx_hash: encodeCCIPTransactionHash(isDeposit ? tx.destTxHash : tx.sourceTxHash, tx.messageID),
         ts: tx.blockTimestamp * 1000,
         tx_from: tx.tokenTransferFrom,
         tx_to: tx.tokenTransferTo,
